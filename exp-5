@@ -1,0 +1,247 @@
+{
+  "nbformat": 4,
+  "nbformat_minor": 0,
+  "metadata": {
+    "colab": {
+      "provenance": [],
+      "authorship_tag": "ABX9TyNQtKzMu3OP7n0OW9bvCUE7",
+      "include_colab_link": true
+    },
+    "kernelspec": {
+      "name": "python3",
+      "display_name": "Python 3"
+    },
+    "language_info": {
+      "name": "python"
+    }
+  },
+  "cells": [
+    {
+      "cell_type": "markdown",
+      "metadata": {
+        "id": "view-in-github",
+        "colab_type": "text"
+      },
+      "source": [
+        "<a href=\"https://colab.research.google.com/github/yokesh345/yokidlv/blob/main/exp-5\" target=\"_parent\"><img src=\"https://colab.research.google.com/assets/colab-badge.svg\" alt=\"Open In Colab\"/></a>"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {
+        "id": "aa77b79a"
+      },
+      "source": [
+        "## U-Net Architecture in PyTorch\n",
+        "\n",
+        "This section provides a basic implementation of the U-Net architecture using PyTorch. The U-Net is a convolutional neural network designed for image segmentation, particularly effective in biomedical image analysis.\n",
+        "\n",
+        "### 1. Imports and Basic Convolutional Block\n",
+        "\n",
+        "First, we import the necessary PyTorch modules and define a `ConvBlock` which consists of two convolutional layers, each followed by Batch Normalization and a ReLU activation function. This block is a fundamental component used throughout the U-Net."
+      ]
+    },
+    {
+      "cell_type": "code",
+      "metadata": {
+        "id": "ebe7043c"
+      },
+      "source": [
+        "import torch\n",
+        "import torch.nn as nn\n",
+        "import torch.nn.functional as F\n",
+        "\n",
+        "class ConvBlock(nn.Module):\n",
+        "    def __init__(self, in_channels, out_channels):\n",
+        "        super(ConvBlock, self).__init__()\n",
+        "        self.block = nn.Sequential(\n",
+        "            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),\n",
+        "            nn.BatchNorm2d(out_channels),\n",
+        "            nn.ReLU(inplace=True),\n",
+        "            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),\n",
+        "            nn.BatchNorm2d(out_channels),\n",
+        "            nn.ReLU(inplace=True)\n",
+        "        )\n",
+        "\n",
+        "    def forward(self, x):\n",
+        "        return self.block(x)"
+      ],
+      "execution_count": 1,
+      "outputs": []
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {
+        "id": "c52b5b1d"
+      },
+      "source": [
+        "### 2. Encoder (Downsampling Path)\n",
+        "\n",
+        "The encoder path (or contracting path) of the U-Net reduces the spatial dimensions of the input image while increasing the feature channels. It typically consists of repeated application of the convolutional block followed by a max-pooling operation."
+      ]
+    },
+    {
+      "cell_type": "code",
+      "metadata": {
+        "id": "33fdecbc"
+      },
+      "source": [
+        "class Encoder(nn.Module):\n",
+        "    def __init__(self, in_channels, out_channels):\n",
+        "        super(Encoder, self).__init__()\n",
+        "        self.conv = ConvBlock(in_channels, out_channels)\n",
+        "        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)\n",
+        "\n",
+        "    def forward(self, x):\n",
+        "        skip_connection = self.conv(x)\n",
+        "        output = self.pool(skip_connection)\n",
+        "        return output, skip_connection"
+      ],
+      "execution_count": 2,
+      "outputs": []
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {
+        "id": "9b0fbac1"
+      },
+      "source": [
+        "### 3. Decoder (Upsampling Path)\n",
+        "\n",
+        "The decoder path (or expansive path) aims to recover the spatial information and combine it with the high-resolution features from the encoder via skip connections. It uses transposed convolutions (or upsampling followed by convolution) to increase spatial dimensions and then applies convolutional blocks."
+      ]
+    },
+    {
+      "cell_type": "code",
+      "metadata": {
+        "id": "d7618184"
+      },
+      "source": [
+        "class Decoder(nn.Module):\n",
+        "    def __init__(self, in_channels, out_channels):\n",
+        "        super(Decoder, self).__init__()\n",
+        "        self.upconv = nn.ConvTranspose2d(in_channels, in_channels // 2, kernel_size=2, stride=2)\n",
+        "        self.conv = ConvBlock(in_channels, out_channels)\n",
+        "\n",
+        "    def forward(self, x, skip_connection):\n",
+        "        x = self.upconv(x)\n",
+        "        # Pad or crop if dimensions don't match exactly due to pooling/upconv\n",
+        "        diffY = skip_connection.size()[2] - x.size()[2]\n",
+        "        diffX = skip_connection.size()[3] - x.size()[3]\n",
+        "        x = F.pad(x, [diffX // 2, diffX - diffX // 2,\n",
+        "                        diffY // 2, diffY - diffY // 2])\n",
+        "\n",
+        "        x = torch.cat((skip_connection, x), dim=1)\n",
+        "        x = self.conv(x)\n",
+        "        return x"
+      ],
+      "execution_count": 3,
+      "outputs": []
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {
+        "id": "63a8f4e4"
+      },
+      "source": [
+        "### 4. U-Net Model\n",
+        "\n",
+        "Finally, we assemble the full U-Net model by combining the encoder and decoder paths. The model takes an input image and outputs a segmentation map with the same spatial dimensions but with a specified number of classes (output channels)."
+      ]
+    },
+    {
+      "cell_type": "code",
+      "metadata": {
+        "id": "37ae957d"
+      },
+      "source": [
+        "class UNet(nn.Module):\n",
+        "    def __init__(self, in_channels=1, out_channels=1, features=[64, 128, 256, 512]):\n",
+        "        super(UNet, self).__init__()\n",
+        "        self.encoders = nn.ModuleList()\n",
+        "        self.decoders = nn.ModuleList()\n",
+        "        self.bottleneck = ConvBlock(features[-1], features[-1] * 2)\n",
+        "        self\n",
+        "\n",
+        "        # Encoder path\n",
+        "        for feature in features:\n",
+        "            self.encoders.append(Encoder(in_channels, feature))\n",
+        "            in_channels = feature\n",
+        "\n",
+        "        # Decoder path\n",
+        "        for feature in reversed(features):\n",
+        "            self.decoders.append(Decoder(feature * 2, feature))\n",
+        "\n",
+        "        self.final_conv = nn.Conv2d(features[0], out_channels, kernel_size=1)\n",
+        "\n",
+        "    def forward(self, x):\n",
+        "        skip_connections = []\n",
+        "        for encoder in self.encoders:\n",
+        "            x, skip = encoder(x)\n",
+        "            skip_connections.append(skip)\n",
+        "\n",
+        "        x = self.bottleneck(x)\n",
+        "        skip_connections = skip_connections[::-1] # Reverse for proper concatenation\n",
+        "\n",
+        "        for i, decoder in enumerate(self.decoders):\n",
+        "            x = decoder(x, skip_connections[i])\n",
+        "\n",
+        "        return self.final_conv(x)"
+      ],
+      "execution_count": 7,
+      "outputs": []
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {
+        "id": "1137421a"
+      },
+      "source": [
+        "### 5. Model Instantiation and Test\n",
+        "\n",
+        "Here's how you can instantiate the U-Net model and pass a dummy input to check its output shape. For biomedical image segmentation, `in_channels` would typically be 1 (for grayscale) or 3 (for RGB), and `out_channels` would be the number of distinct classes you want to segment (e.g., 1 for binary segmentation, or more for multi-class segmentation)."
+      ]
+    },
+    {
+      "cell_type": "code",
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "be1d16eb",
+        "outputId": "2ac0b3cc-5ae3-4cb6-8cf5-fb3c86835ad8"
+      },
+      "source": [
+        "# Example Usage:\n",
+        "in_channels = 1   # e.g., for grayscale medical images\n",
+        "out_channels = 2  # e.g., for binary segmentation (background + foreground)\n",
+        "\n",
+        "unet_model = UNet(in_channels=in_channels, out_channels=out_channels)\n",
+        "\n",
+        "# Create a dummy input tensor (batch_size, channels, height, width)\n",
+        "dummy_input = torch.randn(1, in_channels, 256, 256)\n",
+        "\n",
+        "# Pass the dummy input through the model\n",
+        "output = unet_model(dummy_input)\n",
+        "\n",
+        "print(f\"Input shape: {dummy_input.shape}\")\n",
+        "print(f\"Output shape: {output.shape}\")\n",
+        "\n",
+        "# Optionally, print the model summary (requires torchsummary or similar library)\n",
+        "# from torchsummary import summary\n",
+        "# summary(unet_model, input_size=(in_channels, 256, 256))"
+      ],
+      "execution_count": 6,
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "Input shape: torch.Size([1, 1, 256, 256])\n",
+            "Output shape: torch.Size([1, 2, 256, 256])\n"
+          ]
+        }
+      ]
+    }
+  ]
+}
